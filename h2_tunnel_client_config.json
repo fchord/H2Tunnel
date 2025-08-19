@@ -1,0 +1,7 @@
+{
+    "tunnel_server_ip": "113.92.158.168",
+    "tunnel_server_port": 4443,
+    "tunnel_server_path": "/overseas_proxy",
+    "tunnel_proxy_end_point": "http://127.0.0.1:40000",
+    "debug": true
+}
