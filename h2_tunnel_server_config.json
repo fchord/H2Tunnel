@@ -1,0 +1,7 @@
+{
+  "http_proxy_port": 10818,
+  "https_proxy_port": 10819,
+  "tunnel_server_path": "/overseas_proxy",
+  "debug": true
+}
+
