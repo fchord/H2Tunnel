@@ -4,9 +4,9 @@
     "debug": true,
     "tunnel_server": [
         {
-            "name": "19121122.xyz",
-            "port": 4443,
-            "path": "/overseas_proxy"
+            "name": "your_domain.com",
+            "port": 1234,
+            "path": "/your_proxy_path"
         }
     ]
 }
