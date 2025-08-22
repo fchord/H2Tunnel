@@ -20,22 +20,38 @@ import (
 	"encoding/json"
 	// "crypto/md5"
 	// "encoding/hex"	
+	// "context"
+	"bytes"
+	
 	"golang.org/x/net/http2"
 )
 
+// 定义类型枚举
+type TunnState uint8
+const (
+	TunnStateStopped TunnState = iota
+	TunnStateRunning
+	TunnStateStopping
+)
+
+// TunnelServerConfig 表示单个隧道服务器配置
+type TunnelServerConfig struct {
+	Name 		string 	`json:"name"`
+	Port 		int    	`json:"port"`
+	Path 		string 	`json:"path"`
+	Status 		int		`json:"status"`
+	wg 			sync.WaitGroup
+	tunnState 	TunnState
+}
+
+// Config 表示整个配置文件
 type Config struct {
-	TunnelServerIP    string    			`json:"tunnel_server_ip"`
-	TunnelServerPort  int	    			`json:"tunnel_server_port"`
-	TunnelServerPath  string    			`json:"tunnel_server_path"`
-	TunnelProxyEndPoint	  string 			`json:"tunnel_proxy_end_point"`
-	Debug 			  bool					`json:"debug"`
+	TunnelProxyEndPoint string               `json:"tunnel_proxy_end_point"`
+	LocalProxyEndPoint  string               `json:"local_proxy_end_point"`
+	Debug               bool                 `json:"debug"`
+	TunnelServers       []TunnelServerConfig `json:"tunnel_server"`
 }
 
-
-// 建立 CONNECT 隧道请求结构
-type ConnectTunnelRequest struct {
-	TargetAddr string
-}
 
 var tunnelWriter io.Writer
 var tunnelReader io.Reader
@@ -44,7 +60,6 @@ var tunnelLock sync.Mutex
 var tunnelUpChan chan byte
 var tunnelDownChan chan byte
 
-// 使用 sync.Mutex 保护 map 的并发访问
 type ConnMap struct {
     mu   sync.Mutex
     conns map[uint32]net.Conn
@@ -52,23 +67,22 @@ type ConnMap struct {
 }
 
 var gConfig *Config
-
 var gConnMap *ConnMap
 var muConnMap  sync.Mutex
-
-
 var gPipeReader *io.PipeReader
 var gPipeWriter *io.PipeWriter
 
 
 func main() {
+	var err error
 
     // 生成带时间戳的日志文件名
     timestamp := time.Now().Format("20060102_150405.000") // 年月日_时分秒毫秒
     fileName := fmt.Sprintf("H2Tunnel_%s.log", timestamp)
 
     // 打开或创建日志文件
-    logFile, err := os.OpenFile(fileName, os.O_CREATE|os.O_WRONLY, 0644)
+	var logFile *os.File
+    logFile, err = os.OpenFile(fileName, os.O_CREATE|os.O_WRONLY, 0644)
     if err != nil {
         log.Fatalf("Open log file failed: %v", err)
     }
@@ -81,94 +95,141 @@ func main() {
     log.Printf("pid: %d", os.Getpid())
 
 
-	// var err error
 	gConfig, err = LoadConfig("h2_tunnel_client_config.json")
 	if err != nil {
-		panic(err)
+		log.Fatalf("Load config failed: %v", err)
 	}
 
-	log.Println("Config loaded:")
-	log.Printf("	TunnelServerIP: %s\n", gConfig.TunnelServerIP)
-	log.Printf("	TunnelServerPort: %d\n", gConfig.TunnelServerPort)
-	log.Printf("	TunnelServerPath: %s\n", gConfig.TunnelServerPath)
-	log.Printf("	TunnelProxyEndPoint: %s\n", gConfig.TunnelProxyEndPoint)
-	log.Printf("	Debug: %v\n", gConfig.Debug)
+	log.Printf("Config: %#v\n", gConfig)
+	bs, _ := json.Marshal(gConfig)
+	var out bytes.Buffer
+	json.Indent(&out, bs, "", "\t")
+	log.Printf("Config: \n%v\n", out.String())
+
+	if false == IsValidIPOrDomain(gConfig.LocalProxyEndPoint) {
+		log.Printf("Local proxy endpoint [%s] is illegal", gConfig.LocalProxyEndPoint)
+	}
+
+	// 打印每个 tunnel_server 的 name 是否为合法 IP/域名
+	for _, server := range gConfig.TunnelServers {
+		if IsValidIPOrDomain(server.Name) {
+			log.Printf("Server [%s] is legal ip or domain", server.Name)
+		} else {
+			log.Printf("Server [%s] is illegal", server.Name)
+		}
+	}
+	if len(gConfig.TunnelServers) == 0 {
+		log.Printf("Length of Config TunnelServers option shouldn't be zero")
+		return
+	}
 
 	gConnMap = NewConnMap()
-	h2TunnelClient()
+	for i := 0; i < len(gConfig.TunnelServers); i++ {
+		h2TunnelClient(i)
+	}
+	
 }
+
 
 func LoadConfig(filename string) (*Config, error) {
-	file, err := os.Open(filename)
+	data, err := os.ReadFile(filename)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("LoadConfig failed: %w", err)
 	}
-	defer file.Close()
 
-	decoder := json.NewDecoder(file)
-	var config Config
-	if err := decoder.Decode(&config); err != nil {
-		return nil, err
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("LoadConfig. Unmarshal failed: %w", err)
 	}
-	return &config, nil
+
+	return &cfg, nil
 }
 
-func h2TunnelClient() {
+func IsValidIPOrDomain(s string) bool {
+	// 先判断是否是合法 IP
+	if ip := net.ParseIP(s); ip != nil {
+		return true
+	}
+	// 如果不是 IP，就简单判断是否是合法域名
+	// net.LookupHost 能区分合法域名，但会触发 DNS 查询
+	// 这里用简单的规则：长度合法 + 不能包含空格
+	if len(s) > 0 && len(s) <= 253 {
+		return true
+	}
+	return false
+}
+
+func h2TunnelClient(serverIndex int) {
+	gConfig.TunnelServers[serverIndex].wg.Add(1)
+	defer gConfig.TunnelServers[serverIndex].wg.Done()
 	// 自带锁，不需要加锁
 	pr, pw := io.Pipe()
 	gPipeReader = pr
 	gPipeWriter = pw
 
-	proxy_url, _ := url.Parse(gConfig.TunnelProxyEndPoint)
-	var client http.Client 
-	use_proxy := true
-	if use_proxy == true {
+	var tunnelClient http.Client 
+	var proxyUrl *url.URL
+	proxyEnable := true
+	if len(gConfig.TunnelProxyEndPoint) == 0 {
+		proxyEnable = false
+	} else { 
+		if u, err := url.Parse(gConfig.TunnelProxyEndPoint); err != nil {
+			proxyEnable = false
+		} else {
+			proxyEnable = true
+			proxyUrl = u
+		}
+	}
+	if proxyEnable {
 		httpTransport := &http.Transport{
-			Proxy: http.ProxyURL(proxy_url),
+			Proxy: http.ProxyURL(proxyUrl),
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		}
 		if err := http2.ConfigureTransport(httpTransport); err != nil {
 			log.Fatal(err)
 		}
-		client = http.Client{
+		tunnelClient = http.Client{
 			Transport: httpTransport,
 		}
 	} else {
-		client = http.Client{
+		tunnelClient = http.Client{
 			Transport: &http2.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 			},
 		}
 	}
-	req, err := http.NewRequest("POST", "https://" + gConfig.TunnelServerIP + ":" + strconv.Itoa(gConfig.TunnelServerPort) + gConfig.TunnelServerPath, pr)
+	reqUrl := "https://" + gConfig.TunnelServers[serverIndex].Name + ":" + strconv.Itoa(gConfig.TunnelServers[serverIndex].Port) + gConfig.TunnelServers[serverIndex].Path
+	req, err := http.NewRequest("POST", reqUrl, pr)
 	if err != nil {
 		log.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Connection", "keep-alive")
 
-	resp, err := client.Do(req)
+	resp, err := tunnelClient.Do(req)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer resp.Body.Close()
-
-	log.Println("Response Status: ", resp.Status, resp.Proto)
+	log.Println("H2Tunnel Response Status: ", resp.Status, resp.Proto)
 
 	go func() {
+		gConfig.TunnelServers[serverIndex].wg.Add(1)
+		defer gConfig.TunnelServers[serverIndex].wg.Done()
 		for {
 			// warp 10s 就断开连接了，Read(resp.Body) 会返回 unexpected EOF
 			// 这里每 5s 发一个包当作保活
 			msg_keepalive_byte, _ := NewKeepAlive().ToBytes()
 			gPipeWriter.Write(msg_keepalive_byte)
-			time.Sleep(5 * time.Second)
+			for i := 50; i > 0; i-- {
+				time.Sleep(100 * time.Millisecond)
+			}
 		}
 	}()
 
 	var header [9]byte
 	for {
 		// 读取头部（阻塞直到有9字节）
-		// log.Println("[0] Read header from tunnel")
 		if _, err := io.ReadFull(resp.Body, header[:]); err != nil {
 			if errors.Is(err, io.EOF) {
 				log.Println("Server stream ended")
@@ -188,10 +249,10 @@ func h2TunnelClient() {
 
 		msg := Message{Type: msg_type, ID: id, Length: length, Data: data}
 		if msg.Type != MsgTypeSendData {
-			fmt.Printf("[Parsed] <%d> Type: %s, Length: %d\n", msg.ID, msg.Type, msg.Length)
+			log.Printf("[Parsed] <%d> Type: %s, Length: %d\n", msg.ID, msg.Type, msg.Length)
 		}
 		if msg.Type == MsgTypeCreateDial {
-			go handleHttpConnect(msg)
+			go handleHttpConnect(serverIndex, msg)
 		} else if msg.Type == MsgTypeSendData && msg.ID >= 2 {
 			muConnMap.Lock()
 			conn, ok := gConnMap.Get(msg.ID)
@@ -228,19 +289,53 @@ func h2TunnelClient() {
 	}
 }
 
-func handleHttpConnect(creaDialMess Message) {
+func handleHttpConnect(serverIndex int, creaDialMess Message) {
+	gConfig.TunnelServers[serverIndex].wg.Add(1)
+	defer gConfig.TunnelServers[serverIndex].wg.Done()
+
 	var cd CreateDial
 	if creaDialMess.Type != MsgTypeCreateDial {
 		log.Println("[HttpConnect] The first message should be CreateDial.")
 		return 
 	}
 	_ = json.Unmarshal(creaDialMess.Data, &cd)
-	fmt.Printf("[HttpConnect] DestHost: %s, Identification: %s\n", cd.DestHost, cd.Identification)
-	// Todo: 建立tcp连接
-	// DestHost := string(msg.Data)
-	destConn, err := net.Dial("tcp", cd.DestHost)
-	if err != nil {
-		log.Printf("Failed to connect to %s: %v", cd.DestHost, err)
+	log.Printf("[HttpConnect] DestHost: %s, Identification: %s\n", cd.DestHost, cd.Identification)
+
+	var destConn net.Conn
+	var dialErr error
+	// 定义代理地址
+	if IsValidIPOrDomain(gConfig.LocalProxyEndPoint) {
+		log.Printf("Connect to proxy: %s\n", gConfig.LocalProxyEndPoint)
+		destConn, dialErr = net.Dial("tcp", gConfig.LocalProxyEndPoint)
+		if dialErr != nil {
+			log.Printf("Dial to %s failed: %v", gConfig.LocalProxyEndPoint, dialErr)
+			return 
+		}
+		destConn.Write([]byte("CONNECT " + cd.DestHost + " HTTP/1.1\r\n\r\n"))
+		destConn.Write([]byte("Host: " + cd.DestHost + "\r\n\r\n"))
+		destConn.Write([]byte("User-Agent:  Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0\r\n\r\n"))
+		destConn.Write([]byte("Proxy-Connection: Keep-Alive\r\n\r\n"))
+
+		// buf := make([]byte, 512)
+		reader := bufio.NewReader(destConn)
+		line, err := reader.ReadString('\n')
+		// n, err := destConn.Read(buf)
+		if err != nil {
+			log.Printf("Read local proxy failed: %v", err)
+		} else {
+			log.Printf("Read local proxy: %s", line)
+		}
+		line, err = reader.ReadString('\n') // HTTP Proxy数据以"\r\n\r\n"结束，这里读取第二个"\r\n"。但不读掉它也没关系
+		// log.Printf("Read local proxy one more time: %s, len: %d, line[0]: %d", line, len(line), line[0])  // 打印回车键13
+	} else {
+		// log.Printf("Local proxy endpoint err: %v. Build Dial without proxy.", err)
+		// DestHost := string(msg.Data)
+		destConn, dialErr = net.Dial("tcp", cd.DestHost)
+	}
+	defer destConn.Close()
+
+	if dialErr != nil {
+		log.Printf("Failed to connect to %s: %v", cd.DestHost, dialErr)
 		result := CreateDialResult{
 			Identification: cd.Identification,
 			Result: false,
@@ -248,7 +343,6 @@ func handleHttpConnect(creaDialMess Message) {
 			LocalAddr: "",
 			RemoteAddr: "",
 		}
-		// bin, _ := NewCreateDialResult(false).ToBytes()
 		bin, _ := NewCreateDialResult(1, result).ToBytes()
 		gPipeWriter.Write(bin)
 	} else {
