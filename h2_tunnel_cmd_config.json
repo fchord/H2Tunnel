@@ -1,0 +1,6 @@
+{
+    "check_string": "YOURCHECKSTRING",
+    "public_key_path": "/your/path/public.pem",
+    "h2_tunnel_client_ip": "2.2.2.2",
+    "h2_tunnel_client_cmd_port": 10101
+}

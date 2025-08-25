@@ -1,12 +1,16 @@
 {
     "tunnel_proxy_end_point": "http://127.0.0.1:40000",
     "local_proxy_end_point": "127.0.0.1:40000",
+    "private_key_path": "/your/path/private_unenc.pem",
+    "public_key_path": "/your/path/public.pem",
+    "check_string": "YOURCHECKSTRING",
+    "h2_tunnel_client_cmd_port": 10101,
     "debug": true,
     "tunnel_server": [
         {
             "name": "your_domain.com",
-            "port": 1234,
-            "path": "/your_proxy_path"
+            "port": 10102,
+            "path": "/your_path"
         }
     ]
 }

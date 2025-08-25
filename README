@@ -9,23 +9,41 @@
 - 🔹 国内主机作为server，要求拥有公网IP。如果server主机在NAT后面，需要在路由器上将对外端口映射到server端口上来。
 - 🔹 海外vps运行客户端时支持使用本地http代理（例如warp）作为H2隧道客户端的代理，以隐藏vps ip。
 - 🔹 海外vps运行客户端时支持使用本地http代理（例如warp）作为连接目标主机的代理，以隐藏vps ip。
+- 🔹 使用加密UDP包控制 H2Tunnel 连接与断开、代理开关等操作。
 
 ## 配置详解
     server端配置详解
     {
         "http_proxy_port": 10818,  // 本地http代理端口
         "https_proxy_port": 10819,  // 本地https代理端口，也是H2Tunnel客户端的server端口
-        "tunnel_server_path": "/overseas_proxy",  // H2Tunnel发起连接的路径
+        "tunnel_server_path": "/your_path",  // H2Tunnel发起连接的路径
         "debug": true  // 暂无用
     }
 
     client端配置详解
     {
-        "tunnel_server_ip": "113.92.158.168",  // H2Tunnel server端公网ip，需手动映射到server内网ip
-        "tunnel_server_port": 4443,  // H2Tunnel server端端口，需手动映射到https_proxy_port
-        "tunnel_server_path": "/overseas_proxy",  // H2Tunnel发起连接的路径
         "tunnel_proxy_end_point": "http://127.0.0.1:40000", // H2隧道连接用的本地代理端点
-        "debug": true // 暂无用
+        "local_proxy_end_point": "127.0.0.1:40000", // 连接目标主机用的本地代理端点
+        "private_key_path": "/your/path/private_unenc.pem", // 用于解密命令的私钥
+        "public_key_path": "/your/path/public.pem",  // 用于加密命令的公钥
+        "check_string": "YOURCHECKSTRING", // 用于校验命令包的字符串
+        "h2_tunnel_client_cmd_port": 10101, // 接收UDP命令包的端口号
+        "debug": true, // 暂无用
+        "tunnel_server": [ // 可配置多个H2Tunnel隧道服务器
+            {
+                "name": "your_domain.com",  // H2Tunnel server端公网ip或域名，需手动映射到server内网ip
+                "port": 10102,  // H2Tunnel server端端口，需手动映射到https_proxy_port
+                "path": "/your_path"  // H2Tunnel发起连接的路径
+            }
+        ]
+    }
+
+    cmd配置详解
+    {
+        "check_string": "YOURCHECKSTRING",  // 用于校验命令包的字符串
+        "public_key_path": "/your/path/public.pem",  // 用于加密命令的公钥
+        "h2_tunnel_client_ip": "2.2.2.2", // H2Tunnel client端ip
+        "h2_tunnel_client_cmd_port": 10101  // H2Tunnel client端 接收命令的端口号
     }
 
 ## 快速开始
@@ -34,3 +52,6 @@
 
     client端
     go run h2_tunnel_client.go message.go conn_map.go
+
+    cmd
+    go run h2_tunnel_cmd.go
