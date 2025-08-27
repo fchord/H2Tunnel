@@ -1,7 +1,9 @@
 {
   "http_proxy_port": 10818,
   "https_proxy_port": 10819,
-  "tunnel_server_path": "/overseas_proxy",
+  "tunnel_server_path": "/your_proxy_path",
+  "cert_path": "/your/ssl/path/cert.pem",
+  "key_path": "/your/ssl/path/key.pem",
   "debug": true
 }
 

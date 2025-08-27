@@ -29,6 +29,8 @@ type Config struct {
 	HttpProxyPort  int    		`json:"http_proxy_port"`
 	HttpsProxyPort  int    		`json:"https_proxy_port"`
 	TunnelServerPath  string 	`json:"tunnel_server_path"`
+	CertPath		string 		`json:"cert_path"`
+	KeyPath			string 		`json:"key_path"`
 	Debug bool   				`json:"debug"`
 }
 
@@ -89,6 +91,8 @@ func main() {
 	log.Printf("	HttpProxyPort: %d\n", gConfig.HttpProxyPort)
 	log.Printf("	HttpsProxyPort: %d\n", gConfig.HttpsProxyPort)
 	log.Printf("	TunnelServerPath: %s\n", gConfig.TunnelServerPath)
+	log.Printf("	CertPath: %s\n", gConfig.CertPath)
+	log.Printf("	KeyPath: %s\n", gConfig.KeyPath)
 	log.Printf("	Debug: %v\n", gConfig.Debug)
 
 	go h2TunnelTlsServer()
@@ -119,15 +123,14 @@ func h2TunnelTlsServer() {
 	// tunnMessDownChan = make(chan Message, 64)
 	tunnMessUpChan = make(chan []byte, 64)
 
-	log.Println("[H2TunnServ] strconv.Itoa(gConfig.HttpsProxyPort): ", strconv.Itoa(gConfig.HttpsProxyPort))
 	addr := ":" + strconv.Itoa(gConfig.HttpsProxyPort)
 	log.Println("[H2TunnServ] Starting https proxy on " + addr)
-	certFile := "/etc/ssl/cert.pem"
-	keyFile := "/etc/ssl/key.pem"
+	// certFile := "/etc/ssl/cert.pem"
+	// keyFile := "/etc/ssl/key.pem"
 	err := http.ListenAndServeTLS(
 		addr, 
-		certFile,
-		keyFile,
+		gConfig.CertPath,
+		gConfig.KeyPath,
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == gConfig.TunnelServerPath && r.Method != http.MethodConnect {
 			handleOverseasV1(w, r)

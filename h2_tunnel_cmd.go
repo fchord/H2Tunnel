@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"encoding/binary"
 
-	"h2_tunnel/rsa_demo"
+	"H2Tunnel/rsa_demo"
 )
 
 type CmdType uint8
