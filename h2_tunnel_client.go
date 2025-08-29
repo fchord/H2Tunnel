@@ -125,7 +125,7 @@ func main() {
 		os.Exit(1)
 	}
 
-    // 生成带时间戳的日志文件名
+/*     // 生成带时间戳的日志文件名
     timestamp := time.Now().Format("20060102_150405.000") // 年月日_时分秒毫秒
     fileName := fmt.Sprintf("H2Tunnel_%s.log", timestamp)
 
@@ -138,9 +138,10 @@ func main() {
     defer logFile.Close()
 
     // 设置日志输出到文件
-    log.SetOutput(logFile)
+    log.SetOutput(logFile) */
     // 设置日志前缀和时间格式
-    log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
+    // log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
+	log.SetFlags(log.Lshortfile)
     log.Printf("pid: %d", os.Getpid())
 
 	gConfig, err = LoadConfig(*configPath)
@@ -565,7 +566,7 @@ func handleHttpConnect(serverIndex int, creaDialMess Message) {
 			n, err := reader.Read(buf_in)
 			if err != nil {
 				log.Printf("[HttpConnect] <%d> Error reading from target connection: %v", id, err)
-				destConn.Close()
+				// destConn.Close()
 				destory := NewDestroy(id)
 				destory_byte, _ := destory.ToBytes()
 				gPipeWriter.Write(destory_byte)
