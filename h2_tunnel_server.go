@@ -4,7 +4,7 @@ import (
 	// "bufio"
 	// "crypto/tls"
 	"encoding/gob"
-	// "flag"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -59,13 +59,28 @@ var tunnelDownChan chan byte
 // var tunnMessDownChan chan Message
 var tunnMessUpChan chan []byte
 
-var mapCreaDial map[string]chan Message
+var mapCreaDial map[string] *chan Message
+var muCreaDial  sync.Mutex
 var mapReceData map[uint32] *chan Message
 var muReceData  sync.Mutex
 
 func main() {
+	var err error
 
-    // 生成带时间戳的日志文件名
+	configPath := flag.String("config", "", "Path to configuration file (JSON)")
+	flag.Parse()
+	// 检查 --config
+	if *configPath == "" {
+		log.Println("Error: --config is required")
+		// printHelp()
+		os.Exit(1)
+	}
+	gConfig, err = LoadConfig(*configPath)
+	if err != nil {
+		panic(err)
+	}
+	
+/*     // 生成带时间戳的日志文件名
     timestamp := time.Now().Format("20060102_150405.000") // 年月日_时分秒毫秒
     fileName := fmt.Sprintf("H2Tunnel_%s.log", timestamp)
 
@@ -77,15 +92,12 @@ func main() {
     defer logFile.Close()
 
     // 设置日志输出到文件
-    log.SetOutput(logFile)
+    log.SetOutput(logFile) */
     // 设置日志前缀和时间格式
-    log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
+    // log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
+	log.SetFlags(log.Lshortfile)
     log.Printf("pid: %d", os.Getpid())
 
-	gConfig, err = LoadConfig("h2_tunnel_server_config.json")
-	if err != nil {
-		panic(err)
-	}
 
 	log.Println("Config loaded:")
 	log.Printf("	HttpProxyPort: %d\n", gConfig.HttpProxyPort)
@@ -118,7 +130,7 @@ func h2TunnelTlsServer() {
 	tunnelUpChan = make(chan byte, 1024)
 	tunnelDownChan = make(chan byte, 1024)
 
-	mapCreaDial = make(map[string]chan Message)
+	mapCreaDial = make(map[string] *chan Message)
 	mapReceData = make(map[uint32] *chan Message)
 	// tunnMessDownChan = make(chan Message, 64)
 	tunnMessUpChan = make(chan []byte, 64)
@@ -155,7 +167,7 @@ func h2TunnelServer() {
 }
 
 func handleOverseasV1(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[H2TunnServ] Proto: %s, Method: %s, Host: %s, URL: %s, RemoteAddr: %s\n", r.Proto, r.Method, r.Host, r.URL, r.RemoteAddr)
+	log.Printf("[H2TunnServ] TUNNEL CLIENT CONNECTED! Addr: %s, Host: %s, URL: %s, Proto: %s, Method: %s\n", r.RemoteAddr, r.Host, r.URL, r.Proto, r.Method)
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
@@ -204,8 +216,14 @@ func handleOverseasV1(w http.ResponseWriter, r *http.Request) {
 					log.Printf("[H2TunnServ] Error unmarshalling CreateDialResult: %v", err)
 				} else {
 					log.Printf("[H2TunnServ] CreateDialResult: %s, Result: %t, Id: %d, LocalAddr: %s, RemoteAddr: %s", res.Identification, res.Result, res.ID, res.LocalAddr, res.RemoteAddr)
+					muCreaDial.Lock()
 					dialChan := mapCreaDial[res.Identification]
-					dialChan <- msg
+					muCreaDial.Unlock()
+					if dialChan != nil {
+						*dialChan <- msg
+					} else {
+						log.Printf("[H2TunnServ] No dial channel found for CreateDialResult with identification %s", res.Identification)
+					}
 				}				
 			} else if MsgTypeReceiveData == msg_type || MsgTypeDestroy == msg_type {
 				id := msg.ID
@@ -307,7 +325,10 @@ func handleHTTPSRemoteV1(w http.ResponseWriter, r *http.Request) {
 	identification := hex.EncodeToString(time_hash[:])[:6]
 	log.Printf("[HTTPS] Handling CONNECT request for %s. identification: %s", r.Host, identification)
 	msg := NewCreateDial(r.Host, identification)
-	mapCreaDial[identification] = make(chan Message, 1)
+	chCreaDial := make(chan Message, 1)
+	muCreaDial.Lock()
+	mapCreaDial[identification] = &chCreaDial
+	muCreaDial.Unlock()
 	// log.Printf("[HTTPS] Send CreaDial msg into tunnMessUpChan. identification: %s", identification)
 	if msg_bin, err := msg.ToBytes(); err != nil {
 		log.Printf("[HTTPS] Error converting CreateDial to bytes: %v", err)
@@ -317,9 +338,11 @@ func handleHTTPSRemoteV1(w http.ResponseWriter, r *http.Request) {
 		tunnMessUpChan <- msg_bin
 	}
 	// log.Printf("[HTTPS] Send CreaDial msg into tunnMessUpChan completed. identification: %s", identification)
-	resu_mess := <- mapCreaDial[identification]
+	resu_mess := <- chCreaDial // mapCreaDial[identification]
 	log.Printf("[HTTPS] Got response from mapCreaDial for %s. identification: %s", r.Host, identification)
+	muCreaDial.Lock()
 	delete(mapCreaDial, identification)
+	muCreaDial.Unlock()
 	if resu_mess.Type == MsgTypeCreateDialResult {
 		var res CreateDialResult
 		err := json.Unmarshal(resu_mess.Data, &res)
